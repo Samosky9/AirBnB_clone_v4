@@ -1,115 +1,105 @@
 #!/usr/bin/python3
-""" objects that handle all default RestFul API actions for Reviews """
-from models.review import Review
-from models.place import Place
-from models.user import User
-from models import storage
-from api.v1.views import app_views
-from flask import abort, jsonify, make_response, request
-from flasgger.utils import swag_from
+"""
+route for handling place and amenities linking
+"""
+from flask import jsonify, abort
+from os import getenv
+
+from api.v1.views import app_views, storage
 
 
-@app_views.route('/places/<place_id>/reviews', methods=['GET'],
+@app_views.route("/places/<place_id>/amenities",
+                 methods=["GET"],
                  strict_slashes=False)
-@swag_from('documentation/reviews/get_reviews.yml', methods=['GET'])
-def get_reviews(place_id):
+def amenity_by_place(place_id):
     """
-    Retrieves the list of all Review objects of a Place
+    get all amenities of a place
+    :param place_id: amenity id
+    :return: all amenities
     """
-    place = storage.get(Place, place_id)
+    fetched_obj = storage.get("Place", str(place_id))
 
-    if not place:
+    all_amenities = []
+
+    if fetched_obj is None:
         abort(404)
 
-    reviews = [review.to_dict() for review in place.reviews]
+    for obj in fetched_obj.amenities:
+        all_amenities.append(obj.to_json())
 
-    return jsonify(reviews)
-
-
-@app_views.route('/reviews/<review_id>', methods=['GET'], strict_slashes=False)
-@swag_from('documentation/reviews/get_review.yml', methods=['GET'])
-def get_review(review_id):
-    """
-    Retrieves a Review object
-    """
-    review = storage.get(Review, review_id)
-    if not review:
-        abort(404)
-
-    return jsonify(review.to_dict())
+    return jsonify(all_amenities)
 
 
-@app_views.route('/reviews/<review_id>', methods=['DELETE'],
+@app_views.route("/places/<place_id>/amenities/<amenity_id>",
+                 methods=["DELETE"],
                  strict_slashes=False)
-@swag_from('documentation/reviews/delete_reviews.yml', methods=['DELETE'])
-def delete_review(review_id):
+def unlink_amenity_from_place(place_id, amenity_id):
     """
-    Deletes a Review Object
+    unlinks an amenity in a place
+    :param place_id: place id
+    :param amenity_id: amenity id
+    :return: empty dict or error
     """
-
-    review = storage.get(Review, review_id)
-
-    if not review:
+    if not storage.get("Place", str(place_id)):
+        abort(404)
+    if not storage.get("Amenity", str(amenity_id)):
         abort(404)
 
-    storage.delete(review)
-    storage.save()
+    fetched_obj = storage.get("Place", place_id)
+    found = 0
 
-    return make_response(jsonify({}), 200)
+    for obj in fetched_obj.amenities:
+        if str(obj.id) == amenity_id:
+            if getenv("HBNB_TYPE_STORAGE") == "db":
+                fetched_obj.amenities.remove(obj)
+            else:
+                fetched_obj.amenity_ids.remove(obj.id)
+            fetched_obj.save()
+            found = 1
+            break
+
+    if found == 0:
+        abort(404)
+    else:
+        resp = jsonify({})
+        resp.status_code = 201
+        return resp
 
 
-@app_views.route('/places/<place_id>/reviews', methods=['POST'],
+@app_views.route("/places/<place_id>/amenities/<amenity_id>",
+                 methods=["POST"],
                  strict_slashes=False)
-@swag_from('documentation/reviews/post_reviews.yml', methods=['POST'])
-def post_review(place_id):
+def link_amenity_to_place(place_id, amenity_id):
     """
-    Creates a Review
+    links a amenity with a place
+    :param place_id: place id
+    :param amenity_id: amenity id
+    :return: return Amenity obj added or error
     """
-    place = storage.get(Place, place_id)
 
-    if not place:
+    fetched_obj = storage.get("Place", str(place_id))
+    amenity_obj = storage.get("Amenity", str(amenity_id))
+    found_amenity = None
+
+    if not fetched_obj or not amenity_obj:
         abort(404)
 
-    if not request.get_json():
-        abort(400, description="Not a JSON")
+    for obj in fetched_obj.amenities:
+        if str(obj.id) == amenity_id:
+            found_amenity = obj
+            break
 
-    if 'user_id' not in request.get_json():
-        abort(400, description="Missing user_id")
+    if found_amenity is not None:
+        return jsonify(found_amenity.to_json())
 
-    data = request.get_json()
-    user = storage.get(User, data['user_id'])
+    if getenv("HBNB_TYPE_STORAGE") == "db":
+        fetched_obj.amenities.append(amenity_obj)
+    else:
+        fetched_obj.amenities = amenity_obj
 
-    if not user:
-        abort(404)
+    fetched_obj.save()
 
-    if 'text' not in request.get_json():
-        abort(400, description="Missing text")
+    resp = jsonify(amenity_obj.to_json())
+    resp.status_code = 201
 
-    data['place_id'] = place_id
-    instance = Review(**data)
-    instance.save()
-    return make_response(jsonify(instance.to_dict()), 201)
-
-
-@app_views.route('/reviews/<review_id>', methods=['PUT'], strict_slashes=False)
-@swag_from('documentation/reviews/put_reviews.yml', methods=['PUT'])
-def put_review(review_id):
-    """
-    Updates a Review
-    """
-    review = storage.get(Review, review_id)
-
-    if not review:
-        abort(404)
-
-    if not request.get_json():
-        abort(400, description="Not a JSON")
-
-    ignore = ['id', 'user_id', 'place_id', 'created_at', 'updated_at']
-
-    data = request.get_json()
-    for key, value in data.items():
-        if key not in ignore:
-            setattr(review, key, value)
-    storage.save()
-    return make_response(jsonify(review.to_dict()), 200)
+    return resp
